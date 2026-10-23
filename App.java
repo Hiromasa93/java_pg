@@ -1,5 +1,6 @@
 import com.sun.net.httpserver.HttpServer; // Webサーバーの機能を読み込みます。
 import java.net.InetSocketAddress; // 待ち受ける住所とポートを指定する機能を読み込みます。
+import java.net.URLDecoder; // URL内の記号列を元の文字に戻す機能を読み込みます。
 
 public class App { // Appという名前のクラスを定義します。
     public static void main(String[] args) throws Exception { // Javaプログラムの開始位置を定義します。【1】
@@ -8,7 +9,16 @@ public class App { // Appという名前のクラスを定義します。
             String path = exchange.getRequestURI().getPath(); // アクセスされたパスを取り出します。
             String message;
             if (path.equals("/hello")) { // パスが /hello かどうかを比べます。
-                message = "こんにちは！";
+                String query = exchange.getRequestURI().getRawQuery(); // URLのクエリ文字列を取り出します。
+                System.out.println("query = " + query);
+                String name;
+                if (query == null) { // クエリがないかどうかを確認します。
+                    name = "ゲスト"; // 名前がないときはゲストにします。
+                } else {
+                    name = query.substring(5); // name=の後ろを切り出します。
+                    name = URLDecoder.decode(name, "UTF-8"); // URL内の記号列をUTF-8の文字に戻します。
+                }
+                message = "こんにちは、" + name + "さん！"; // 名前を含めた応答文を作ります。
             } else if (path.equals("/bye")) { // パスが /bye かどうかを比べます。
                 message = "さようなら！";
             } else if (path.equals("/menu")) {
