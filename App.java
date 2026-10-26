@@ -1,119 +1,217 @@
-import com.sun.net.httpserver.HttpServer; // Webサーバーの機能を読み込みます。
-import java.util.ArrayList; // Todoを順番に並べて保存するリストを作る機能を読み込みます。
-import java.util.List; // Todoのリストを表す型を読み込みます。
-import java.net.InetSocketAddress; // 待ち受ける住所とポートを指定する機能を読み込みます。
-import java.net.URLDecoder; // URL内の記号列を元の文字に戻す機能を読み込みます。
-import java.nio.charset.StandardCharsets; // UTF-8の文字コードを指定する機能を読み込みます。
+// import（機能の読み込み）: Javaに最初からある通信・文字・リストの機能を使えるようにします。
+import com.sun.net.httpserver.HttpServer; // ブラウザーからのリクエストを受け付けるWebサーバーです。
+import java.io.IOException; // 通信中に起きる入出力エラーを表します。
+import java.net.InetSocketAddress; // サーバーのポート番号など、接続先の情報を表します。
+import java.net.URLDecoder; // フォームから届く記号を元の文字に戻します。
+import java.nio.charset.StandardCharsets; // 日本語を正しく扱うためUTF-8を指定します。
+import java.util.ArrayList; // Todoを複数保存する入れ物を作ります。
+import java.util.LinkedHashMap; // フォームの項目名と入力内容を組にして保存します。
+import java.util.List; // Todo一覧の型です。
+import java.util.Map; // 項目名と値の組を扱う型です。
 
-public class App { // Appという名前のクラスを定義します。
-    static List<Todo> todos = new ArrayList<>(); // ★変更 Todoを保存するリストをクラス直下に置きます。
-    static int nextId = 1; // ★変更 次に振る番号をクラス直下に置きます。
+// Appは、このアプリ全体の処理をまとめたクラス（設計図）です。
+public class App {
+    // staticは、アプリ全体で共有するデータという意味です。追加したTodoをここに保存します。
+    static List<Todo> todos = new ArrayList<>();
+    // 新しいTodoに重ならない番号を付けるためのカウンターです。
+    static int nextId = 1;
 
-    public static void main(String[] args) throws Exception { // Javaプログラムの開始位置を定義します。【1】
-        todos.add(new Todo(nextId++, "牛乳を買う")); // ★変更 起動時のサンプルTodoを追加します。
-        Todo egg = new Todo(nextId++, "卵を買う"); // ★変更 起動時のサンプルTodoを作ります。
-        egg.setDone(true); // ★変更 卵を買うTodoを完了にします。
-        todos.add(egg); // ★変更 卵を買うTodoを追加します。
-        HttpServer server = HttpServer.create(new InetSocketAddress(8080), 0); // 8080番ポートでサーバーを用意します。【1】
-        server.createContext("/", exchange -> { // ルートURLへのリクエストを処理します。【1】
-            String path = exchange.getRequestURI().getPath(); // アクセスされたパスを取り出します。
-            String method = exchange.getRequestMethod(); // GETやPOSTなどの方法を取り出します。
-            String message;
-            exchange.getResponseHeaders().set("Content-Type", "text/plain; charset=UTF-8"); // 通常の応答をUTF-8のテキストにします。
-            if (path.equals("/add") && method.equals("POST")) { // POSTで /add に届いたTodoを処理します。
-                String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8); // 送られてきた内容をUTF-8で読み取ります。
-                String value = body.substring(5); // todo=の5文字を除いた値を取り出します。
-                String title = URLDecoder.decode(value, StandardCharsets.UTF_8); // ★変更 URL形式の文字をUTF-8の日本語に戻します。
-                if (!title.isEmpty()) { // ★変更 入力が空でないかを確認します。
-                    todos.add(new Todo(nextId, title)); // ★変更 Todoをリストに追加します。
-                    nextId++; // ★変更 次に振る番号を進めます。
+    // mainはJavaを起動したとき最初に実行されるメソッド（処理のまとまり）です。
+    public static void main(String[] args) throws Exception {
+        // 起動時に表示するサンプルのTodoを2件用意します。
+        todos.add(new Todo(nextId++, "牛乳を買う", "日時未設定"));
+        Todo egg = new Todo(nextId++, "卵を買う", "日時未設定");
+        // サンプルの卵のTodoだけ、最初から完了状態にします。
+        egg.setDone(true);
+        todos.add(egg);
+        // 8080番ポート（通信の窓口番号）でWebサーバーを作ります。
+        HttpServer server = HttpServer.create(new InetSocketAddress(8080), 0);
+        // URLの入口を登録し、ブラウザーから来たリクエスト（要求）に応じて処理します。
+        server.createContext("/", exchange -> {
+            // リクエストのURLの道筋（例: /add）と通信方法（GET/POST）を取り出します。
+            String path = exchange.getRequestURI().getPath();
+            String method = exchange.getRequestMethod();
+            // POSTはフォーム送信です。受け取った内容から新しいTodoを作ります。
+            if (path.equals("/add") && method.equals("POST")) {
+                // フォームの本文をUTF-8で読み、項目名と入力内容に分けます。
+                Map<String, String> form = parseForm(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+                // todo欄の文字を取り出し、前後の空白を取り除きます。
+                String title = form.getOrDefault("todo", "").trim();
+                // タスク名が空でなければ、予定内容も含めて一覧に追加します。
+                if (!title.isEmpty()) todos.add(new Todo(nextId++, title, makeSchedule(form)));
+                redirect(exchange);
+                return;
+            // GETはページを開く通信です。idを使って完了または削除します。
+            } else if ((path.equals("/done") || path.equals("/delete")) && method.equals("GET")) {
+                String query = exchange.getRequestURI().getQuery();
+                if (query != null && query.startsWith("id=")) {
+                    try {
+                        // URLに含まれるTodo番号を文字から整数に変換します。
+                        int id = Integer.parseInt(query.substring(3));
+                        if (path.equals("/done")) {
+                            // 番号が一致するTodoを完了状態にします。
+                            for (Todo todo : todos) if (todo.getId() == id) { todo.setDone(true); break; }
+                        // 削除の場合は、番号が一致するTodoを一覧から取り除きます。
+                        } else todos.removeIf(todo -> todo.getId() == id);
+                    // 数字ではない番号が届いた場合は、その操作を無視します。
+                    } catch (NumberFormatException ignored) { }
                 }
-                exchange.getResponseHeaders().set("Location", "/"); // 戻り先を / に設定します。
-                exchange.sendResponseHeaders(303, -1); // / への移動をブラウザーに伝えます。
-                exchange.close(); // 応答を閉じます。
-                return; // この分岐の処理を終えます。
-            } else if (path.equals("/done") && method.equals("GET")) { // ★追加 GET /done でTodoを完了にします。
-                String query = exchange.getRequestURI().getQuery(); // ★追加 URLの ? 以降を受け取ります。
-                if (query != null && query.startsWith("id=") && query.length() > 3) { // ★追加 idがあるか確認します。
-                    try { // ★追加 idを数字に変換します。
-                        int id = Integer.parseInt(query.substring(3)); // ★追加 idを数に変えます。
-                        for (Todo todo : todos) { // ★追加 Todoを1件ずつ確認します。
-                            if (todo.getId() == id) { // ★追加 idが一致するTodoを探します。
-                                todo.setDone(true); // ★追加 Todoを完了にします。
-                                break; // ★追加 1件見つかったので繰り返しを終えます。
-                            }
-                        }
-                    } catch (NumberFormatException e) { // ★追加 数字でないidは何もせず受け止めます。
-                    }
-                }
-                exchange.getResponseHeaders().set("Location", "/"); // ★追加 戻り先を / にします。
-                exchange.sendResponseHeaders(303, -1); // ★追加 303で / に戻します。
-                exchange.close(); // ★追加 応答を閉じます。
-                return; // ★追加 ここで処理を終えます。
-            } else if (path.equals("/delete") && method.equals("GET")) { // ★追加 GET /delete でTodoを削除します。
-                String query = exchange.getRequestURI().getQuery(); // ★追加 URLの ? 以降を受け取ります。
-                if (query != null && query.startsWith("id=") && query.length() > 3) { // ★追加 idがあるか確認します。
-                    try { // ★追加 idを数字に変換します。
-                        int id = Integer.parseInt(query.substring(3)); // ★追加 idを数に変えます。
-                        todos.removeIf(todo -> todo.getId() == id); // ★追加 idが一致するTodoを削除します。
-                    } catch (NumberFormatException e) { // ★追加 数字でないidは何もせず受け止めます。
-                    }
-                }
-                exchange.getResponseHeaders().set("Location", "/"); // ★追加 戻り先を / にします。
-                exchange.sendResponseHeaders(303, -1); // ★追加 303で / に戻します。
-                exchange.close(); // ★追加 応答を閉じます。
-                return; // ★追加 ここで処理を終えます。
-            } else if (path.equals("/")) { // パスが / のときフォームとTodo一覧を表示します。
-                String html = "<form method='post' action='/add'><input name='todo'><button>追加</button></form><ul>"; // Todoを送るフォームと一覧を開始します。
-                for (Todo todo : todos) { // ★変更 Todoを1件ずつ取り出します。
-                    String mark = ""; // ★変更 完了印を空にします。
-                    if (todo.isDone()) { // ★変更 Todoが完了しているか確認します。
-                        mark = " <span style='color: #C8A2C8;'>【済】</span>"; // ★変更 完了表示を薄紫色にします。
-                    }
-                    html += "<li>" + todo.getTitle() + mark + " <a href='/done?id=" + todo.getId()
-                            + "'>完了</a> <a href='/delete?id=" + todo.getId() + "'>削除</a></li>"; // ★追加
-                                                                                                // id付きの完了・削除リンクを項目に追加します。
-                } // TodoをHTMLに追加する処理を終えます。
-                html += "</ul>"; // HTMLのリストを閉じます。
-                message = html; // 組み立てたHTMLを応答にします。
-                exchange.getResponseHeaders().set("Content-Type", "text/html; charset=UTF-8"); // / の応答をUTF-8のHTMLにします。
-            } else { // どちらのパスにも当てはまらない場合を処理します。
-                message = "ページが見つかりません"; // ★変更 見つからないページの応答です。
+                redirect(exchange);
+                return;
+            // /以外の知らないURLには「ページが見つかりません」と返します。
+            } else if (!path.equals("/")) {
+                send(exchange, "ページが見つかりません", "text/plain; charset=UTF-8");
+                return;
             }
-            byte[] body = message.getBytes("UTF-8"); // 返す文字をUTF-8のバイト列にします。【毎】
-            exchange.sendResponseHeaders(200, body.length); // 成功の応答と本文の長さを送ります。【毎】
-            exchange.getResponseBody().write(body); // 本文をブラウザへ送ります。【毎】
-            exchange.getResponseBody().close(); // 応答の送信を終了します。【毎】
-        }); // ルートURLの処理を登録します。【1】
-        server.start(); // サーバーの待ち受けを開始します。【1】
-        System.out.println("サーバー起動: http://localhost:8080 （止めるときは Ctrl+C）"); // 指定された起動メッセージを表示します。【1】
-    } // mainメソッドを終了します。【1】
-} // Appクラスを終了します。
 
-class Todo { // ★変更 Todoの情報をまとめるクラスです。
-    private final int id; // ★変更 Todoの番号です。
-    private final String title; // ★変更 やることです。
-    private boolean done; // ★変更 終わったかどうかです。
+            // HTML（ブラウザーに見せるページ）を文字列として組み立てます。
+            // StringBuilderは文字をつなげる道具です。ここでは画面のHTMLを順番に足します。
+            StringBuilder html = new StringBuilder("<!DOCTYPE html><html><head><meta charset='UTF-8'>"
+                    + "<meta name='viewport' content='width=device-width, initial-scale=1'><title>わたしのTodo</title>"
+                    + "<style>body{max-width:720px;margin:24px auto;padding:0 16px;font:16px sans-serif}"
+                    + "form{display:grid;gap:12px;padding:16px;border:1px solid #ddd;border-radius:8px}"
+                    + ".days{display:flex;flex-wrap:wrap;gap:12px}li{margin:12px 0}"
+                    + ".schedule{display:block;color:#555;margin-top:4px}input,select,button{font:inherit;padding:7px}</style>"
+                    + "</head><body><h1>わたしのTodo</h1><form method='post' action='/add'>"
+                    // inputは入力欄、selectは選択欄です。nameは送信時に使う項目名です。
+                    + "<label>タスク名 <input name='todo' required></label>"
+                    + "<label>繰り返し <select name='repeat'><option value='none'>繰り返さない</option>"
+                    + "<option value='daily'>毎日</option><option value='weekly'>毎週</option>"
+                    + "<option value='monthly'>毎月</option></select></label>"
+                    + "<label>間隔（何日・何週間・何か月ごと） <input type='number' name='interval' min='1' value='1'></label>"
+                    // checkboxは複数の曜日を選べるチェック欄です。
+                    + "<fieldset><legend>曜日（毎週の場合）</legend><div class='days'>"
+                    + day("mon", "月") + day("tue", "火") + day("wed", "水") + day("thu", "木")
+                    + day("fri", "金") + day("sat", "土") + day("sun", "日")
+                    + "</div></fieldset><label>日付（毎月の場合） <input type='number' name='monthday' min='1' max='31' placeholder='例: 15'></label>"
+                    // dateは日付欄、timeは時刻欄です。入力値もTodoの予定として保存します。
+                    + "<label>開始日 <input type='date' name='startDate'></label>"
+                    + "<label>時刻 <input type='time' name='time'></label><button>追加</button></form>");
+            // Todoがまだない場合は案内を出し、ある場合は1件ずつ一覧にします。
+            if (todos.isEmpty()) html.append("<p>やることは、いまゼロです</p>");
+            else {
+                html.append("<ul>");
+                for (Todo todo : todos) {
+                    // 完了済みなら「済」の印を追加します。
+                    html.append("<li>").append(escape(todo.getTitle()))
+                            .append(todo.isDone() ? " <span style='color:#8a5a8a'>【済】</span>" : "")
+                            // 予定と、完了・削除のリンクを一覧に加えます。
+                            .append("<span class='schedule'>予約: ").append(escape(todo.getSchedule())).append("</span>")
+                            .append(" <a href='/done?id=").append(todo.getId()).append("'>完了</a>")
+                            .append(" <a href='/delete?id=").append(todo.getId()).append("'>削除</a></li>");
+                }
+                html.append("</ul>");
+            }
+            html.append("</body></html>");
+            // 作ったHTMLをブラウザーへ返します。
+            send(exchange, html.toString(), "text/html; charset=UTF-8");
+        });
+        // サーバーの待ち受けを開始します。
+        server.start();
+        System.out.println("サーバー起動: http://localhost:8080 （止めるときは Ctrl+C）");
+    }
 
-    Todo(int id, String title) { // ★変更 Todoを作ります。
-        this.id = id; // ★変更 番号を保存します。
-        this.title = title; // ★変更 やることを保存します。
-        this.done = false; // ★変更 最初は未完了にします。
-    } // ★変更 コンストラクタを閉じます。
+    // 曜日チェック欄のHTMLを作る補助メソッドです。codeは送信値、nameは画面表示です。
+    private static String day(String code, String name) {
+        return "<label><input type='checkbox' name='weekday' value='" + code + "'>" + name + "</label>";
+    }
 
-    int getId() { // ★変更 Todoの番号を読み出します。
-        return id; // ★変更 番号を返します。
-    } // ★変更 メソッドを閉じます。
+    // 処理後にブラウザーをTodo一覧へ戻す転送（リダイレクト）です。
+    private static void redirect(com.sun.net.httpserver.HttpExchange ex) throws IOException {
+        ex.getResponseHeaders().set("Location", "/");
+        ex.sendResponseHeaders(303, -1);
+        ex.close();
+    }
 
-    String getTitle() { // ★変更 やることを読み出します。
-        return title; // ★変更 やることを返します。
-    } // ★変更 メソッドを閉じます。
+    // 文字列の返事をブラウザーへ送信します。IOExceptionは通信エラーの種類です。
+    private static void send(com.sun.net.httpserver.HttpExchange ex, String msg, String type) throws IOException {
+        // ブラウザーへ送るため、文字をUTF-8のバイト（通信で送るデータ）に変換します。
+        byte[] bytes = msg.getBytes(StandardCharsets.UTF_8);
+        ex.getResponseHeaders().set("Content-Type", type);
+        ex.sendResponseHeaders(200, bytes.length);
+        ex.getResponseBody().write(bytes);
+        ex.getResponseBody().close();
+    }
 
-    boolean isDone() { // ★変更 終わったかどうかを読み出します。
-        return done; // ★変更 完了状態を返します。
-    } // ★変更 メソッドを閉じます。
+    // フォームの本文を読み取り、各入力項目を「名前: 値」の組にします。
+    private static Map<String, String> parseForm(String body) {
+        // Mapは項目名から入力値を探せる辞書のような入れ物です。
+        Map<String, String> values = new LinkedHashMap<>();
+        // &で分かれたフォーム項目を1つずつ読み取ります。
+        for (String pair : body.split("&")) {
+            String[] parts = pair.split("=", 2);
+            String key = URLDecoder.decode(parts[0], StandardCharsets.UTF_8);
+            String value = parts.length > 1 ? URLDecoder.decode(parts[1], StandardCharsets.UTF_8) : "";
+            // 曜日は複数選べるので、2つ目以降は前の値につなげて保存します。
+            if (key.equals("weekday") && values.containsKey(key)) values.put(key, values.get(key) + "," + value);
+            else values.put(key, value);
+        }
+        return values;
+    }
 
-    void setDone(boolean done) { // ★変更 終わったかどうかを書き換えます。
-        this.done = done; // ★変更 完了状態を保存します。
-    } // ★変更 メソッドを閉じます。
-} // ★変更 Todoクラスを閉じます。
+    // 頻度・曜日・日付・時刻から、一覧に表示する予定の文章を作ります。
+    private static String makeSchedule(Map<String, String> f) {
+        String repeat = f.getOrDefault("repeat", "none");
+        // interval（間隔）が未入力や数字以外なら、初期値の1を使います。
+        int interval = 1;
+        try { interval = Math.max(1, Integer.parseInt(f.getOrDefault("interval", "1"))); }
+        catch (NumberFormatException ignored) { }
+        StringBuilder s = new StringBuilder();
+        // 選ばれた頻度に応じて、毎日・毎週・毎月などの説明を組み立てます。
+        if (repeat.equals("daily")) s.append(interval == 1 ? "毎日" : "毎" + interval + "日ごと");
+        else if (repeat.equals("weekly")) {
+            s.append(interval == 1 ? "毎週" : interval + "週間ごと");
+            // フォームから届く曜日コードと、画面に表示する日本語を同じ順番で並べます。
+            String[] codes = {"mon", "tue", "wed", "thu", "fri", "sat", "sun"};
+            String[] names = {"月", "火", "水", "木", "金", "土", "日"};
+            String selected = f.getOrDefault("weekday", "");
+            boolean first = true; // 最初の曜日だけ区切り記号を変えるための目印です。
+            for (int i = 0; i < codes.length; i++) if (selected.contains(codes[i])) {
+                s.append(first ? " " : "・").append(names[i]);
+                first = false;
+            }
+        } else if (repeat.equals("monthly")) {
+            s.append(interval == 1 ? "毎月" : interval + "か月ごと");
+            try {
+                int d = Integer.parseInt(f.getOrDefault("monthday", ""));
+                if (d >= 1 && d <= 31) s.append(" ").append(d).append("日");
+            } catch (NumberFormatException ignored) { }
+        } else {
+            String date = f.getOrDefault("startDate", "");
+            s.append(date.isEmpty() ? "日時未設定" : date.replace('-', '/'));
+        }
+        // 繰り返し予定には開始日も付け、時刻が入力されていれば末尾に加えます。
+        String start = f.getOrDefault("startDate", "");
+        if (!start.isEmpty() && !repeat.equals("none")) s.append("（開始 ").append(start.replace('-', '/')).append("）");
+        String time = f.getOrDefault("time", "");
+        if (!time.isEmpty()) s.append(" ").append(time);
+        return s.toString();
+    }
+
+    // タスク名にHTMLの記号があってもページの命令として動かないよう、表示用に置き換えます。
+    private static String escape(String v) {
+        return v.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                .replace("\"", "&quot;").replace("'", "&#39;");
+    }
+}
+
+// Todo1件分の情報（番号、名前、予定、完了したか）をまとめるクラスです。
+class Todo {
+    // finalは作成後に変えない値、booleanは「はい/いいえ」を表す型です。
+    private final int id;
+    private final String title;
+    private final String schedule;
+    private boolean done;
+    // コンストラクター（作成時の初期設定）で各情報を保存し、最初は未完了にします。
+    Todo(int id, String title, String schedule) {
+        this.id = id; this.title = title; this.schedule = schedule; this.done = false;
+    }
+    // getで始まるメソッドは、Todoの情報を外から読み取るための窓口です。
+    int getId() { return id; }
+    String getTitle() { return title; }
+    String getSchedule() { return schedule; }
+    // isDoneは完了しているかを返し、setDoneは完了状態を書き換えます。
+    boolean isDone() { return done; }
+    void setDone(boolean done) { this.done = done; }
+}
+
