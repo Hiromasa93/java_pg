@@ -6,9 +6,15 @@ import java.net.URLDecoder; // URL内の記号列を元の文字に戻す機能�
 import java.nio.charset.StandardCharsets; // UTF-8の文字コードを指定する機能を読み込みます。
 
 public class App { // Appという名前のクラスを定義します。
+    static List<Todo> todos = new ArrayList<>(); // ★変更 Todoを保存するリストをクラス直下に置きます。
+    static int nextId = 1; // ★変更 次に振る番号をクラス直下に置きます。
+
     public static void main(String[] args) throws Exception { // Javaプログラムの開始位置を定義します。【1】
+        todos.add(new Todo(nextId++, "牛乳を買う")); // ★変更 起動時のサンプルTodoを追加します。
+        Todo egg = new Todo(nextId++, "卵を買う"); // ★変更 起動時のサンプルTodoを作ります。
+        egg.setDone(true); // ★変更 卵を買うTodoを完了にします。
+        todos.add(egg); // ★変更 卵を買うTodoを追加します。
         HttpServer server = HttpServer.create(new InetSocketAddress(8080), 0); // 8080番ポートでサーバーを用意します。【1】
-        List<String> todos = new ArrayList<>(); // Todoを保存する空のリストを用意します。
         server.createContext("/", exchange -> { // ルートURLへのリクエストを処理します。【1】
             String path = exchange.getRequestURI().getPath(); // アクセスされたパスを取り出します。
             String method = exchange.getRequestMethod(); // GETやPOSTなどの方法を取り出します。
@@ -17,9 +23,10 @@ public class App { // Appという名前のクラスを定義します。
             if (path.equals("/add") && method.equals("POST")) { // POSTで /add に届いたTodoを処理します。
                 String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8); // 送られてきた内容をUTF-8で読み取ります。
                 String value = body.substring(5); // todo=の5文字を除いた値を取り出します。
-                String todo = URLDecoder.decode(value, StandardCharsets.UTF_8); // URL形式の文字をUTF-8の日本語に戻します。
-                if (!todo.isEmpty()) { // 入力が空でないかを確認します。
-                    todos.add(todo); // Todoをリストに追加します。
+                String title = URLDecoder.decode(value, StandardCharsets.UTF_8); // ★変更 URL形式の文字をUTF-8の日本語に戻します。
+                if (!title.isEmpty()) { // ★変更 入力が空でないかを確認します。
+                    todos.add(new Todo(nextId, title)); // ★変更 Todoをリストに追加します。
+                    nextId++; // ★変更 次に振る番号を進めます。
                 }
                 exchange.getResponseHeaders().set("Location", "/"); // 戻り先を / に設定します。
                 exchange.sendResponseHeaders(303, -1); // / への移動をブラウザーに伝えます。
@@ -27,29 +34,18 @@ public class App { // Appという名前のクラスを定義します。
                 return; // この分岐の処理を終えます。
             } else if (path.equals("/")) { // パスが / のときフォームとTodo一覧を表示します。
                 String html = "<form method='post' action='/add'><input name='todo'><button>追加</button></form><ul>"; // Todoを送るフォームと一覧を開始します。
-                for (String todo : todos) { // Todoを1件ずつ取り出します。
-                    html += "<li>" + todo + "</li>"; // TodoをHTMLの項目として追加します。
+                for (Todo todo : todos) { // ★変更 Todoを1件ずつ取り出します。
+                    String mark = ""; // ★変更 完了印を空にします。
+                    if (todo.isDone()) { // ★変更 Todoが完了しているか確認します。
+                        mark = " ✔"; // ★変更 完了印を付けます。
+                    }
+                    html += "<li>" + todo.getTitle() + mark + "</li>"; // ★変更 titleと完了印をHTMLの項目として追加します。
                 } // TodoをHTMLに追加する処理を終えます。
                 html += "</ul>"; // HTMLのリストを閉じます。
                 message = html; // 組み立てたHTMLを応答にします。
                 exchange.getResponseHeaders().set("Content-Type", "text/html; charset=UTF-8"); // / の応答をUTF-8のHTMLにします。
-            } else if (path.equals("/hello")) { // パスが /hello かどうかを比べます。
-                String query = exchange.getRequestURI().getRawQuery(); // URLのクエリ文字列を取り出します。
-                System.out.println("query = " + query);
-                String name;
-                if (query == null) { // クエリがないかどうかを確認します。
-                    name = "ゲスト"; // 名前がないときはゲストにします。
-                } else {
-                    name = query.substring(5); // name=の後ろを切り出します。
-                    name = URLDecoder.decode(name, "UTF-8"); // URL内の記号列をUTF-8の文字に戻します。
-                }
-                message = "こんにちは、" + name + "さん！"; // 名前を含めた応答文を作ります。
-            } else if (path.equals("/bye")) { // パスが /bye かどうかを比べます。
-                message = "さようなら！";
-            } else if (path.equals("/menu")) {
-                message = "今夜の定食はカレー";
             } else { // どちらのパスにも当てはまらない場合を処理します。
-                message = "ページが見つかりません";
+                message = "ページが見つかりません"; // ★変更 見つからないページの応答です。
             }
             byte[] body = message.getBytes("UTF-8"); // 返す文字をUTF-8のバイト列にします。【毎】
             exchange.sendResponseHeaders(200, body.length); // 成功の応答と本文の長さを送ります。【毎】
@@ -60,3 +56,31 @@ public class App { // Appという名前のクラスを定義します。
         System.out.println("サーバー起動: http://localhost:8080 （止めるときは Ctrl+C）"); // 指定された起動メッセージを表示します。【1】
     } // mainメソッドを終了します。【1】
 } // Appクラスを終了します。
+
+class Todo { // ★変更 Todoの情報をまとめるクラスです。
+    private final int id; // ★変更 Todoの番号です。
+    private final String title; // ★変更 やることです。
+    private boolean done; // ★変更 終わったかどうかです。
+
+    Todo(int id, String title) { // ★変更 Todoを作ります。
+        this.id = id; // ★変更 番号を保存します。
+        this.title = title; // ★変更 やることを保存します。
+        this.done = false; // ★変更 最初は未完了にします。
+    } // ★変更 コンストラクタを閉じます。
+
+    int getId() { // ★変更 Todoの番号を読み出します。
+        return id; // ★変更 番号を返します。
+    } // ★変更 メソッドを閉じます。
+
+    String getTitle() { // ★変更 やることを読み出します。
+        return title; // ★変更 やることを返します。
+    } // ★変更 メソッドを閉じます。
+
+    boolean isDone() { // ★変更 終わったかどうかを読み出します。
+        return done; // ★変更 完了状態を返します。
+    } // ★変更 メソッドを閉じます。
+
+    void setDone(boolean done) { // ★変更 終わったかどうかを書き換えます。
+        this.done = done; // ★変更 完了状態を保存します。
+    } // ★変更 メソッドを閉じます。
+} // ★変更 Todoクラスを閉じます。
