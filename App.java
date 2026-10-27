@@ -81,6 +81,35 @@ public class App {
                 send(exchange, "データベースエラー: " + escape(e.getMessage()), "text/plain; charset=UTF-8"); // ★
             }
         });
+                server.createContext("/api/todos",exchange->
+        
+            { // Todo一覧APIの入口を追加します
+                if (!exchange.getRequestURI().getPath().equals("/api/todos")) { // パスが完全一致しない場合は404を返します
+                    sendJson(exchange, 404, "{\"error\":\"not found\"}"); // エラー内容もJSONで返します
+                    return; // 以降の処理を終了します
+                } // パスの確認を終えます
+                if (!exchange.getRequestMethod().equals("GET")) { // GET以外のリクエストを確認します
+                    exchange.getResponseHeaders().set("Allow", "GET"); // 許可するメソッドを通知します
+                    exchange.sendResponseHeaders(405, -1); // 405を返して本文を省略します
+                    exchange.close(); // 接続を閉じます
+                    return; // 以降の処理を終了します
+                } // メソッドの確認を終えます
+                try { // Todo一覧の取得とJSONへの変換を行います
+                    StringBuilder json = new StringBuilder("["); // JSON配列を作り始めます
+                    List<Todo> todos = loadTodos(); // データベースから全Todoを読み込みます
+                    for (int i = 0; i < todos.size(); i++) { // Todoを順番にJSONへ追加します
+                        Todo todo = todos.get(i); // 現在のTodoを取り出します
+                        if (i > 0)
+                            json.append(","); // 2件目以降の前に区切り文字を追加します
+                        json.append("{\"title\":").append(jsonString(todo.title == null ? "" : todo.title)) // タイトルをJSON文字列として追加します
+                                .append(",\"done\":").append(todo.done).append("}"); // 完了状態をJSONの真偽値として追加します
+                    } // Todoの追加を終えます
+                    json.append("]"); // JSON配列を閉じます
+                    sendJson(exchange, 200, json.toString()); // JSONを200で返します
+                } catch (SQLException e) { // データベースエラーを処理します
+                    sendJson(exchange, 500, "{\"error\":\"database error\"}"); // エラーをJSONで返します
+                } // Todo一覧の処理を終えます
+            }); // Todo一覧APIの入口を登録します
         server.start();
         System.out.println("サーバー起動: http://localhost:8080 （止めるときは Ctrl+C）");
     }
@@ -113,7 +142,7 @@ public class App {
         List<Todo> todos = new ArrayList<>(); // ★
         try (PreparedStatement statement = connection.prepareStatement(
                 "SELECT id, title, done FROM todos ORDER BY id"); // ★
-             ResultSet rows = statement.executeQuery()) { // ★
+                ResultSet rows = statement.executeQuery()) { // ★
             while (rows.next()) { // ★
                 todos.add(new Todo(rows.getInt("id"), rows.getString("title"), rows.getInt("done") != 0)); // ★
             }
@@ -151,6 +180,34 @@ public class App {
         exchange.getResponseBody().write(bytes);
         exchange.getResponseBody().close();
     }
+
+    private static String jsonString(String value) { // 文字列をJSON形式にエスケープします
+        StringBuilder json = new StringBuilder("\""); // JSON文字列の開始引用符を追加します
+        for (int i = 0; i < value.length(); i++) { // 文字列を1文字ずつ処理します
+            char c = value.charAt(i); // 現在の文字を取り出します
+            switch (c) { // 特殊文字ごとにJSON用の表記へ変換します
+                case '"': json.append("\\\""); break; // 引用符をエスケープします
+                case '\\': json.append("\\\\"); break; // バックスラッシュをエスケープします
+                case '\b': json.append("\\b"); break; // バックスペースをエスケープします
+                case '\f': json.append("\\f"); break; // フォームフィードをエスケープします
+                case '\n': json.append("\\n"); break; // 改行をエスケープします
+                case '\r': json.append("\\r"); break; // 復帰をエスケープします
+                case '\t': json.append("\\t"); break; // タブをエスケープします
+                default: // その他の文字を処理します
+                    if (c < 0x20) json.append(String.format("\\u%04x", (int) c)); // 制御文字をUnicode表記にします
+                    else json.append(c); // 通常の文字はそのまま追加します
+            } // 文字ごとの変換を終えます
+        } // 文字列の変換を終えます
+        return json.append("\"").toString(); // 終了引用符を追加して返します
+    } // JSON文字列のエスケープ処理を終えます
+    
+    private static void sendJson(com.sun.net.httpserver.HttpExchange exchange, int status, String body) throws IOException { // JSONレスポンスを送信します
+        byte[] bytes = body.getBytes(StandardCharsets.UTF_8); // 本文をUTF-8のバイト列にします
+        exchange.getResponseHeaders().set("Content-Type", "application/json"); // charsetを付けずにContent-Typeを設定します
+        exchange.sendResponseHeaders(status, bytes.length); // ステータスと本文サイズを送信します
+        exchange.getResponseBody().write(bytes); // JSON本文を書き込みます
+        exchange.close(); // レスポンスを閉じます
+    } // JSONレスポンスの送信を終えます
 }
 
 class Todo {
